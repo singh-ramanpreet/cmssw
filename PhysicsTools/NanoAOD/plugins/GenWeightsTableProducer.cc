@@ -17,6 +17,7 @@
 #include <vector>
 #include <unordered_map>
 #include <iostream>
+#include <fstream>
 #include <regex>
 
 namespace {
@@ -158,6 +159,7 @@ class GenWeightsTableProducer : public edm::global::EDProducer<edm::StreamCache<
     public:
         GenWeightsTableProducer( edm::ParameterSet const & params ) :
             genTag_(consumes<GenEventInfoProduct>(params.getParameter<edm::InputTag>("genEvent"))),
+            missingLHEHeaderFile_(params.getParameter<edm::FileInPath>("missingLHEHeaderFile")),
             lheLabel_(params.getParameter<std::vector<edm::InputTag>>("lheInfo")),
             lheTag_(edm::vector_transform(lheLabel_, [this](const edm::InputTag & tag) { return mayConsume<LHEEventProduct>(tag); })),
             lheRunTag_(edm::vector_transform(lheLabel_, [this](const edm::InputTag & tag) { return mayConsume<LHERunInfoProduct, edm::InRun>(tag); })),
@@ -366,7 +368,24 @@ class GenWeightsTableProducer : public edm::global::EDProducer<edm::StreamCache<
                 std::regex pdfwmg26x("<weight\\s+id=\"(\\d+)\"\\s*MUR=\"(?:\\S+)\"\\s*MUF=\"(?:\\S+)\"\\s*(?:PDF set|lhapdf|PDF|pdfset)\\s*=\\s*\"(\\d+)\"\\s*>\\s*(?:PDF=(\\d+)\\s*MemberID=(\\d+))?\\s*(?:\\s.*)?</weight>");
                 std::regex rwgt("<weight\\s+id=\"(.+)\">(.+)?(</weight>)?");
                 std::smatch groups;
-                for (auto iter=lheInfo->headers_begin(), end = lheInfo->headers_end(); iter != end; ++iter) {
+
+                std::auto_ptr<LHERunInfoProduct> newLHEInfo(new LHERunInfoProduct());
+                bool newHeader = false;
+                //FileInPath can't be empty, defaulted to some existing file "README"
+                bool isLHEHeaderFileDefault = boost::algorithm::contains(missingLHEHeaderFile_.fullPath(), "README");
+                if (!isLHEHeaderFileDefault){
+                    newHeader = true;
+                    std::ifstream readLHEHeaderFile(missingLHEHeaderFile_.fullPath(), std::ifstream::in);
+                    LHERunInfoProduct::Header missingLHEHeader("initrwgt");
+                    std::string fileLine;
+                    while (std::getline(readLHEHeaderFile, fileLine)) { missingLHEHeader.addLine(fileLine + "\n"); }
+                    newLHEInfo->addHeader(missingLHEHeader);
+                }
+                auto iter_begin = newHeader? newLHEInfo->headers_begin(): lheInfo->headers_begin();
+                auto iter_end = newHeader? newLHEInfo->headers_end(): lheInfo->headers_end();
+
+                for (auto iter = iter_begin, end = iter_end; iter != end; ++iter) {
+                //for (auto iter=lheInfo->headers_begin(), end = lheInfo->headers_end(); iter != end; ++iter) {
                     if (iter->tag() != "initrwgt") {
                         if (lheDebug) std::cout << "Skipping LHE header with tag" << iter->tag() << std::endl;
                         continue;
@@ -651,6 +670,7 @@ class GenWeightsTableProducer : public edm::global::EDProducer<edm::StreamCache<
             edm::ParameterSetDescription desc;
             desc.add<edm::InputTag>("genEvent", edm::InputTag("generator"))->setComment("tag for the GenEventInfoProduct, to get the main weight");
             desc.add<edm::InputTag>("genLumiInfoHeader", edm::InputTag("generator"))->setComment("tag for the GenLumiInfoProduct, to get the model string");
+            desc.add<edm::FileInPath>("missingLHEHeaderFile", edm::FileInPath("README"))->setComment("path to missing lhe header ascii file");
             desc.add<std::vector<edm::InputTag>>("lheInfo", std::vector<edm::InputTag>{{"externalLHEProducer"},{"source"}})->setComment("tag(s) for the LHE information (LHEEventProduct and LHERunInfoProduct)");
 
             edm::ParameterSetDescription prefpdf;
@@ -668,6 +688,7 @@ class GenWeightsTableProducer : public edm::global::EDProducer<edm::StreamCache<
 
     protected:
         const edm::EDGetTokenT<GenEventInfoProduct> genTag_;
+        const edm::FileInPath missingLHEHeaderFile_;
         const std::vector<edm::InputTag> lheLabel_;
         const std::vector<edm::EDGetTokenT<LHEEventProduct>> lheTag_;
         const std::vector<edm::EDGetTokenT<LHERunInfoProduct>> lheRunTag_;
